@@ -1,0 +1,21 @@
+# ------------------------------------------------------------------
+# STEEZR-INFRA CONFIGURATION
+# ------------------------------------------------------------------
+
+project_name: "steezr-demo"
+
+# DOMAIN SETTINGS
+# Leave empty to use Magic Mode (<ip>.nip.io).
+# Set to your domain (e.g., "example.com") for production (requires DNS setup).
+base_domain: ""
+
+# INFRASTRUCTURE
+infrastructure:
+  region: "fsn1"        # Nuremberg (nbg1) or Falkenstein (fsn1)
+  node_count: 3         # High Availability Control Plane
+  node_type: "cx32"     # 4 vCPU / 8 GB RAM (Recommended for HA)
+
+# FEATURE FLAGS
+features:
+  monitoring: true      # Install Prometheus/Grafana
+  demo_app: true        # Install Django HA Demo
