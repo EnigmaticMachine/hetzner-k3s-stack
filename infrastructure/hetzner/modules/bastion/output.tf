@@ -1,3 +1,3 @@
 output "private_ip" {
-  value = "10.0.1.1"
+  value = tolist(hcloud_server.vps.network)[0].ip
 }

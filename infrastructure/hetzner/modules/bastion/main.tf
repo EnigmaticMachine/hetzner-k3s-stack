@@ -19,3 +19,13 @@ variable "image_id" {
   description = "The ID of the server image to use."
   type        = string
 }
+
+variable "bastion_ip_index" {
+  description = "The host index for the bastion (e.g., 1 for 10.0.0.1)"
+  type        = number
+  default     = 1
+}
+
+variable "subnet_cidr" {
+  type = string
+}

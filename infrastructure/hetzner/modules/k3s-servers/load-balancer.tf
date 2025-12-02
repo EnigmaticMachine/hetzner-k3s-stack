@@ -14,7 +14,7 @@ resource "hcloud_load_balancer" "k3s_lb" {
 resource "hcloud_load_balancer_network" "lb_net" {
   load_balancer_id = hcloud_load_balancer.k3s_lb.id
   network_id       = var.network_id
-  ip               = "10.0.1.3" # Static internal IP for the LB
+  ip               = cidrhost(var.subnet_cidr, 3)
 }
 
 # ---------------------------------------------------------------------
@@ -77,13 +77,13 @@ resource "hcloud_load_balancer_service" "k3s_api" {
 
 # Dynamically add all K3s servers as targets
 resource "hcloud_load_balancer_target" "targets" {
-  for_each = hcloud_server.k3s_node
+  for_each         = hcloud_server.k3s_node
   load_balancer_id = hcloud_load_balancer.k3s_lb.id
   type             = "server"
 
-  server_id = each.value.id
+  server_id      = each.value.id
   use_private_ip = true
-  depends_on = [hcloud_load_balancer_network.lb_net]
+  depends_on     = [hcloud_load_balancer_network.lb_net]
 }
 
 # ---------------------------------------------------------------------

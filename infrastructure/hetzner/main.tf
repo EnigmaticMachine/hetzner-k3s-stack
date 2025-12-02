@@ -2,21 +2,6 @@
 # export AWS_ACCESS_KEY_ID=<HETZNER-STORAGE-ACCESS-KEY>
 # export AWS_SECRET_ACCESS_KEY=<HETZNER-STORAGE-SECRET-KEY>
 
-variable "nodes" {
-  description = "Map of node names to configuration."
-  type = map(object({
-    ip_suffix = number # We will use this to generate 10.0.1.x
-  }))
-
-  # Default configuration
-  default = {
-    "k3s-server-1" = { ip_suffix = 11 }
-    "k3s-server-2" = { ip_suffix = 12 }
-    "k3s-server-3" = { ip_suffix = 13 }
-  }
-}
-
-
 data "hcloud_image" "debian-12" {
   name = "debian-12"
 }
@@ -45,11 +30,13 @@ resource "hcloud_network_route" "internet_access" {
 }
 
 module "bastion" {
-  source     = "./modules/bastion"
-  image_id   = data.hcloud_image.debian-12.id
-  subnet_id  = hcloud_network_subnet.private_subnet.id
-  ssh_key_id = hcloud_ssh_key.main.id
-  network_id = hcloud_network.private_network.id
+  source           = "./modules/bastion"
+  image_id         = data.hcloud_image.debian-12.id
+  subnet_id        = hcloud_network_subnet.private_subnet.id
+  ssh_key_id       = hcloud_ssh_key.main.id
+  network_id       = hcloud_network.private_network.id
+  subnet_cidr      = hcloud_network_subnet.private_subnet.ip_range
+  bastion_ip_index = 2
 }
 
 module "k3s_servers" {
