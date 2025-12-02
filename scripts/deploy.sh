@@ -6,13 +6,13 @@ cd infrastructure/hetzner
 
 # Handle Remote State (Optional)
 if [ -n "$AWS_ACCESS_KEY_ID" ]; then
-    echo "🔒 S3 Credentials detected."
+    echo "S3 Credentials detected."
     if [ ! -f "backend.tf" ]; then
         cp backend.tf.example backend.tf
-        echo "✅ Enabled S3 Backend."
+        echo "Enabled S3 Backend."
     fi
 else
-    echo "⚠️  No S3 Credentials. Using Local State."
+    echo "No S3 Credentials. Using Local State."
 fi
 
 terraform init
