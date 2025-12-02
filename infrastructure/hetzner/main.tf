@@ -1,78 +1,68 @@
-# --- 1. Network & Bastion ---
+# You need to setup env variables, if you have Terraform state on S£:
+# export AWS_ACCESS_KEY_ID=<HETZNER-STORAGE-ACCESS-KEY>
+# export AWS_SECRET_ACCESS_KEY=<HETZNER-STORAGE-SECRET-KEY>
+
+variable "nodes" {
+  description = "Map of node names to configuration."
+  type = map(object({
+    ip_suffix = number # We will use this to generate 10.0.1.x
+  }))
+
+  # Default configuration
+  default = {
+    "k3s-server-1" = { ip_suffix = 11 }
+    "k3s-server-2" = { ip_suffix = 12 }
+    "k3s-server-3" = { ip_suffix = 13 }
+  }
+}
+
+
+data "hcloud_image" "debian-13" {
+  name = "debian-13"
+}
+
+resource "hcloud_ssh_key" "main" {
+  name       = "k3s-admin-key"
+  public_key = var.ssh_public_key
+}
+
+resource "hcloud_network" "private_network" {
+  name     = "k3s-private-network"
+  ip_range = "10.0.0.0/16"
+}
+
+resource "hcloud_network_subnet" "private_subnet" {
+  network_id   = hcloud_network.private_network.id
+  type         = "cloud"
+  network_zone = "eu-central"
+  ip_range     = "10.0.1.0/24"
+}
+
+resource "hcloud_network_route" "internet_access" {
+  network_id  = hcloud_network.private_network.id
+  destination = "0.0.0.0/0"
+  gateway     = module.bastion.private_ip
+}
+
 module "bastion" {
-  source   = "./modules/bastion"
-  image_id = "debian-12"
+  source     = "./modules/bastion"
+  image_id   = data.hcloud_image.debian-13.id
+  subnet_id  = hcloud_network_subnet.private_subnet.id
+  ssh_key_id = hcloud_ssh_key.main.id
+  network_id = hcloud_network.private_network.id
 }
 
-# --- 2. The 3 HA Nodes (Converged Control Plane + Worker) ---
-resource "hcloud_server" "k3s_node" {
-  count       = 3
-  name        = "k3s-node-${count.index + 1}"
-  server_type = "cx32" 
-  image       = "debian-12"
-  location    = "fsn1"
+module "k3s_servers" {
+  source     = "./modules/k3s-servers"
+  network_id = hcloud_network.private_network.id
+  image_id   = data.hcloud_image.debian-13.id
+  ssh_key_id = hcloud_ssh_key.main.id
 
-  user_data = <<-EOT
-    #cloud-config
-    users:
-      - name: ops-admin
-        groups: sudo, docker
-        shell: /bin/bash
-        sudo: ['ALL=(ALL) NOPASSWD:ALL']
-        ssh_authorized_keys:
-          - ${var.ssh_public_key}
-    package_update: true
-    packages:
-      - python3
-      - curl
-      - open-iscsi
-      - nfs-common
-    runcmd:
-      - systemctl enable --now iscsid
-  EOT
-
-  network {
-    network_id = module.bastion.private_network_id
-    ip         = "10.0.1.1${count.index + 1}"
+  # Define nodes here
+  nodes = {
+    "control-plane-1" = { ip_suffix = 11 }
+    "control-plane-2" = { ip_suffix = 12 }
+    "control-plane-3" = { ip_suffix = 13 }
+    # Future scaling: just add "worker-1" = { ip_suffix = 21 }
   }
-
-  public_net {
-    ipv4_enabled = false
-    ipv6_enabled = false
-  }
-}
-
-# --- 3. Load Balancer ---
-resource "hcloud_load_balancer" "lb" {
-  name               = "k3s-lb"
-  load_balancer_type = "lb11"
-  location           = "fsn1"
-}
-
-resource "hcloud_load_balancer_network" "lb_net" {
-  load_balancer_id = hcloud_load_balancer.lb.id
-  network_id       = module.bastion.private_network_id
-  ip               = "10.0.1.2"
-}
-
-resource "hcloud_load_balancer_target" "lb_targets" {
-  count            = 3
-  type             = "server"
-  load_balancer_id = hcloud_load_balancer.lb.id
-  server_id        = hcloud_server.k3s_node[count.index].id
-  use_private_ip   = true
-}
-
-resource "hcloud_load_balancer_service" "https" {
-  load_balancer_id = hcloud_load_balancer.lb.id
-  protocol         = "tcp"
-  listen_port      = 443
-  destination_port = 443
-}
-
-resource "hcloud_load_balancer_service" "k8s_api" {
-  load_balancer_id = hcloud_load_balancer.lb.id
-  protocol         = "tcp"
-  listen_port      = 6443
-  destination_port = 6443
 }
