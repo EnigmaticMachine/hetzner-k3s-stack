@@ -17,8 +17,8 @@ variable "nodes" {
 }
 
 
-data "hcloud_image" "debian-13" {
-  name = "debian-13"
+data "hcloud_image" "debian-12" {
+  name = "debian-12"
 }
 
 resource "hcloud_ssh_key" "main" {
@@ -46,19 +46,19 @@ resource "hcloud_network_route" "internet_access" {
 
 module "bastion" {
   source     = "./modules/bastion"
-  image_id   = data.hcloud_image.debian-13.id
+  image_id   = data.hcloud_image.debian-12.id
   subnet_id  = hcloud_network_subnet.private_subnet.id
   ssh_key_id = hcloud_ssh_key.main.id
   network_id = hcloud_network.private_network.id
 }
 
 module "k3s_servers" {
-  source     = "./modules/k3s-servers"
-  network_id = hcloud_network.private_network.id
-  image_id   = data.hcloud_image.debian-13.id
-  ssh_key_id = hcloud_ssh_key.main.id
+  source      = "./modules/k3s-servers"
+  network_id  = hcloud_network.private_network.id
+  image_id    = data.hcloud_image.debian-12.id
+  ssh_key_id  = hcloud_ssh_key.main.id
+  subnet_cidr = hcloud_network_subnet.private_subnet.ip_range
 
-  # Define nodes here
   nodes = {
     "control-plane-1" = { ip_suffix = 11 }
     "control-plane-2" = { ip_suffix = 12 }

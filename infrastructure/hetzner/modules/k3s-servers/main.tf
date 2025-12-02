@@ -17,3 +17,8 @@ variable "image_id" {
   description = "The ID of the server image to use."
   type        = string
 }
+
+variable "subnet_cidr" {
+  description = "CIDR of the private subnet"
+  type        = string
+}

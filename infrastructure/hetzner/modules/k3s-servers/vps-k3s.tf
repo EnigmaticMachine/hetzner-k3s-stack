@@ -22,9 +22,9 @@ resource "hcloud_server" "k3s_node" {
   name     = each.key
 
   image       = var.image_id
-  server_type = "cx33"
+  server_type = "cx23"
   location    = "fsn1"
-  ssh_keys = [var.ssh_key_id]
+  ssh_keys    = [var.ssh_key_id]
 
   placement_group_id = hcloud_placement_group.k3s_spread.id
 
@@ -38,7 +38,7 @@ resource "hcloud_server" "k3s_node" {
 
     # Calculate IP using the specific suffix from map
     # "10.0.1.0/24" + 11 = 10.0.1.11
-    ip = cidrhost("10.0.1.0/24", each.value.ip_suffix)
+    ip = cidrhost(var.subnet_cidr, each.value.ip_suffix)
   }
 
   lifecycle {
