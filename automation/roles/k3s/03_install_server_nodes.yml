@@ -1,0 +1,339 @@
+---
+- name: Install K3s on the First Server Node
+  hosts: k3s_first_server
+  become: true
+  vars_files:
+    - ../vars.yml
+  vars:
+    k3s_version: "{{ k3s_version | default('v1.32.3+k3s1') }}"
+    k3s_install_timeout: 300
+    k3s_service_start_timeout: 60
+  # Note: Play-level environment is kept for other tasks, but the critical
+  # install task will have its own more specific environment block.
+  environment:
+    K3S_TOKEN: "{{ k3s_token }}"
+    INSTALL_K3S_VERSION: "{{ k3s_version }}"
+
+  pre_tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - k3s_token is defined
+          - k3s_token | length > 0
+          - k3s_server_common_flags is defined
+          - k3s_first_server_flags is defined
+        fail_msg: "Required K3s variables are not defined or empty"
+
+    - name: Check if running as root or with sudo
+      ansible.builtin.command: whoami
+      register: current_user
+      changed_when: false
+      failed_when: current_user.stdout != "root"
+
+  tasks:
+    - name: Update apt package cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      register: apt_update_result
+      retries: 3
+      delay: 5
+      until: apt_update_result is succeeded
+
+    - name: Upgrade all packages
+      ansible.builtin.apt:
+        upgrade: dist
+        autoremove: true
+        autoclean: true
+      register: apt_upgrade_result
+      retries: 2
+      delay: 10
+      until: apt_upgrade_result is succeeded
+
+    - name: Install required packages
+      ansible.builtin.apt:
+        name:
+          - curl
+          - ca-certificates
+          - apt-transport-https
+          - software-properties-common
+        state: present
+      register: pkg_install_result
+      retries: 3
+      delay: 5
+      until: pkg_install_result is succeeded
+
+    - name: Check if K3s is already installed
+      ansible.builtin.stat:
+        path: /usr/local/bin/k3s
+      register: k3s_binary
+
+    - name: Check K3s service status
+      ansible.builtin.systemd:
+        name: k3s
+      register: k3s_service_status
+      ignore_errors: true
+      when: k3s_binary.stat.exists
+
+    - name: Install K3s Server (initialize cluster)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -sfL https://get.k3s.io | timeout {{ k3s_install_timeout }} sh -s - server \
+          {{ k3s_server_common_flags }} \
+          {{ k3s_first_server_flags }}
+      args:
+        executable: /bin/bash
+      # FIX: Added environment block with proxy settings to ensure curl works.
+      environment:
+        http_proxy: "http://10.0.1.1:3128"
+        https_proxy: "http://10.0.1.1:3128"
+        no_proxy: "localhost,127.0.0.1,::1,10.0.1.0/24,192.168.0.0/16,{{ inventory_hostname }}"
+        K3S_TOKEN: "{{ k3s_token }}"
+        INSTALL_K3S_VERSION: "{{ k3s_version }}"
+      register: k3s_install_result
+      when: not k3s_binary.stat.exists or (k3s_service_status is defined and k3s_service_status.status.ActiveState != "active")
+      changed_when: k3s_install_result.rc == 0
+      failed_when: k3s_install_result.rc != 0
+      notify: restart k3s
+
+    - name: Wait for K3s service to be active
+      ansible.builtin.systemd:
+        name: k3s
+        state: started
+        enabled: true
+      register: k3s_service_result
+      retries: 5
+      delay: "{{ k3s_service_start_timeout // 5 }}"
+      until: k3s_service_result is succeeded
+
+    - name: Verify K3s cluster is ready
+      ansible.builtin.command: k3s kubectl get nodes
+      register: k3s_nodes
+      changed_when: false
+      retries: 10
+      delay: 10
+      until: k3s_nodes is succeeded and "Ready" in k3s_nodes.stdout
+
+    - name: Get node token for other servers
+      ansible.builtin.slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      register: node_token
+      no_log: true
+
+    - name: Store node token for other servers
+      ansible.builtin.set_fact:
+        k3s_node_token: "{{ node_token.content | b64decode | trim }}"
+      no_log: true
+
+  handlers:
+    - name: restart k3s
+      ansible.builtin.systemd:
+        name: k3s
+        state: restarted
+        daemon_reload: true
+      listen: restart k3s
+
+  post_tasks:
+    - name: Display cluster status
+      ansible.builtin.debug:
+        msg: "K3s first server node installation completed successfully"
+
+
+- name: Install K3s on Other Server Nodes
+  hosts: k3s_other_servers
+  become: true
+  vars_files:
+    - ../vars.yml
+  vars:
+    k3s_version: "{{ k3s_version | default('v1.32.3+k3s1') }}"
+    k3s_install_timeout: 300
+    k3s_service_start_timeout: 60
+  environment:
+    K3S_TOKEN: "{{ k3s_token }}"
+    INSTALL_K3S_VERSION: "{{ k3s_version }}"
+
+  pre_tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - k3s_token is defined
+          - k3s_token | length > 0
+          - k3s_server_common_flags is defined
+          - k3s_other_server_flags is defined
+          - hostvars[groups['k3s_first_server'][0]]['k3s_node_token'] is defined
+        fail_msg: "Required K3s variables are not defined or first server not properly initialized"
+
+    - name: Check if running as root or with sudo
+      ansible.builtin.command: whoami
+      register: current_user
+      changed_when: false
+      failed_when: current_user.stdout != "root"
+
+  tasks:
+    - name: Create Traefik config override for Hetzner LB
+      ansible.builtin.copy:
+        dest: /var/lib/rancher/k3s/server/manifests/traefik-config.yaml
+        content: |
+          apiVersion: helm.cattle.io/v1
+          kind: HelmChartConfig
+          metadata:
+            name: traefik
+            namespace: kube-system
+          spec:
+            valuesContent: |-
+              entryPoints:
+                web:
+                  forwardedHeaders:
+                    trustedIPs:
+                      - "{{ hetzner_lb_private_cidr }}"
+        owner: root
+        group: root
+        mode: '0644'
+    - name: Update apt package cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      register: apt_update_result
+      retries: 3
+      delay: 5
+      until: apt_update_result is succeeded
+
+    - name: Upgrade all packages
+      ansible.builtin.apt:
+        upgrade: dist
+        autoremove: true
+        autoclean: true
+      register: apt_upgrade_result
+      retries: 2
+      delay: 10
+      until: apt_upgrade_result is succeeded
+
+    - name: Install required packages
+      ansible.builtin.apt:
+        name:
+          - curl
+          - ca-certificates
+          - apt-transport-https
+          - software-properties-common
+        state: present
+      register: pkg_install_result
+      retries: 3
+      delay: 5
+      until: pkg_install_result is succeeded
+
+    - name: Check if K3s is already installed
+      ansible.builtin.stat:
+        path: /usr/local/bin/k3s
+      register: k3s_binary
+
+    - name: Check K3s service status
+      ansible.builtin.systemd:
+        name: k3s
+      register: k3s_service_status
+      ignore_errors: true
+      when: k3s_binary.stat.exists
+
+    - name: Wait for first server to be ready
+      ansible.builtin.wait_for:
+        host: "{{ hostvars[groups['k3s_first_server'][0]]['ansible_default_ipv4']['address'] }}"
+        port: 6443
+        timeout: 300
+      delegate_to: localhost
+
+    - name: Install K3s Server (join cluster)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -sfL https://get.k3s.io | timeout {{ k3s_install_timeout }} sh -s - server \
+          {{ k3s_server_common_flags }} \
+          {{ k3s_other_server_flags }}
+      args:
+        executable: /bin/bash
+      # FIX: Added proxy settings to the existing environment block.
+      environment:
+        http_proxy: "http://10.0.1.1:3128"
+        https_proxy: "http://10.0.1.1:3128"
+        no_proxy: "localhost,127.0.0.1,::1,10.0.1.0/24,192.168.0.0/16,{{ inventory_hostname }}"
+        INSTALL_K3S_VERSION: "{{ k3s_version }}"
+        K3S_TOKEN: "{{ hostvars[groups['k3s_first_server'][0]]['k3s_node_token'] }}"
+      register: k3s_install_result
+      when: not k3s_binary.stat.exists or (k3s_service_status is defined and k3s_service_status.status.ActiveState != "active")
+      changed_when: k3s_install_result.rc == 0
+      failed_when: k3s_install_result.rc != 0
+      notify: restart k3s
+      no_log: true
+
+    - name: Wait for K3s service to be active
+      ansible.builtin.systemd:
+        name: k3s
+        state: started
+        enabled: true
+      register: k3s_service_result
+      retries: 5
+      delay: "{{ k3s_service_start_timeout // 5 }}"
+      until: k3s_service_result is succeeded
+
+    - name: Verify K3s node joined cluster
+      ansible.builtin.command: k3s kubectl get nodes
+      register: k3s_nodes
+      changed_when: false
+      retries: 15
+      delay: 10
+      until: k3s_nodes is succeeded and ansible_hostname in k3s_nodes.stdout and "Ready" in k3s_nodes.stdout
+
+  handlers:
+    - name: restart k3s
+      ansible.builtin.systemd:
+        name: k3s
+        state: restarted
+        daemon_reload: true
+      listen: restart k3s
+
+  post_tasks:
+    - name: Display node status
+      ansible.builtin.debug:
+        msg: "K3s server node {{ ansible_hostname }} joined cluster successfully"
+
+
+- name: Verify K3s Cluster Health
+  hosts: k3s_first_server
+  become: true
+  vars_files:
+    - ../vars.yml
+
+  tasks:
+    - name: Get all cluster nodes
+      ansible.builtin.command: k3s kubectl get nodes -o wide
+      register: cluster_nodes
+      changed_when: false
+
+    - name: Display cluster information
+      ansible.builtin.debug:
+        msg: "{{ cluster_nodes.stdout_lines }}"
+
+    - name: Check cluster component health
+      ansible.builtin.command: k3s kubectl get componentstatuses
+      register: component_status
+      changed_when: false
+      ignore_errors: true
+
+    - name: Display component health
+      ansible.builtin.debug:
+        msg: "{{ component_status.stdout_lines }}"
+      when: component_status is succeeded
+
+    - name: Get cluster info
+      ansible.builtin.command: k3s kubectl cluster-info
+      register: cluster_info
+      changed_when: false
+
+    - name: Display cluster info
+      ansible.builtin.debug:
+        msg: "{{ cluster_info.stdout_lines }}"
+
+    - name: Final cluster validation
+      ansible.builtin.assert:
+        that:
+          - cluster_nodes.rc == 0
+          - "'Ready' in cluster_nodes.stdout"
+        success_msg: "K3s cluster is healthy and all nodes are ready"
+        fail_msg: "K3s cluster validation failed"

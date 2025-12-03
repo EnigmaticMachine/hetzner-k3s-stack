@@ -1,0 +1,105 @@
+---
+- name: Setup System-Wide Proxy on Application Servers
+  hosts: k3s_all_vps
+  become: true
+
+  vars:
+    # --- Vault-protected variables (in vars/main.yml or group_vars) ---
+    # vault_proxy_user: "proxyuser"
+    # vault_proxy_pass: "proxypassword"
+
+    # --- Configuration variables ---
+    proxy_host: "10.0.1.1"
+    proxy_port: "3128"
+
+    # Build the proxy URL dynamically. This handles cases with and without auth.
+    proxy_url_base: "http://{{ proxy_host }}:{{ proxy_port }}"
+    proxy_url_auth: "http://{{ vault_proxy_user | default('') }}:{{ vault_proxy_pass | default('') }}@{{ proxy_host }}:{{ proxy_port }}"
+    proxy_url: "{{ proxy_url_auth if vault_proxy_user is defined else proxy_url_base }}"
+
+    # Hardcoded no_proxy list as per the original version.
+    no_proxy_list:
+      - "localhost"
+      - "127.0.0.1"
+      - ".cluster.local" # Add cluster domain
+      - "10.42.0.0/16"   # Default K3s Pod CIDR
+      - "10.43.0.0/16"   # Default K3s Service CIDR
+      - "::1"
+      - "10.0.1.0/24"
+      - "192.168.0.0/16"
+      - "{{ inventory_hostname }}"
+      - "10.0.1.3" # K3S Public LB IP
+      - "10.0.1.2" # K3S Private LB IP
+
+
+  tasks:
+    - name: Configure proxy for interactive shells
+      # This creates a script in /etc/profile.d/, which is the standard, portable
+      # method for setting environment variables for all users upon login.
+      ansible.builtin.template:
+        src: templates/proxy.sh.j2
+        dest: /etc/profile.d/proxy.sh
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Create systemd config directory for environment variables
+      # Ensures the drop-in directory exists before we place a file in it.
+      ansible.builtin.file:
+        path: /etc/systemd/system.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Configure proxy for all systemd services
+      # This is the modern, correct way to set default environment variables
+      # for the entire service manager. Services will inherit these variables
+      # upon their next restart.
+      ansible.builtin.template:
+        src: templates/99-proxy-vars.conf.j2
+        dest: /etc/systemd/system.conf.d/99-proxy-vars.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Reload systemd config
+
+    - name: Configure APT to use the specified HTTP proxy
+      # Manages the APT-specific proxy configuration.
+      ansible.builtin.template:
+        src: templates/99proxy-apt.conf.j2
+        dest: /etc/apt/apt.conf.d/99proxy-apt.conf
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Ensure containerd config directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/system/containerd.service.d
+        state: directory
+        mode: '0755'
+
+    - name: Create systemd drop-in file for containerd proxy
+      ansible.builtin.copy: # Changed from 'template' to 'copy'
+        dest: /etc/systemd/system/containerd.service.d/http-proxy.conf
+        content: |          # Changed from 'src' to 'content'
+          [Service]
+          Environment="HTTP_PROXY={{ proxy_url }}"
+          Environment="HTTPS_PROXY={{ proxy_url }}"
+          Environment="NO_PROXY={{ no_proxy_list | join(',') }}"
+        mode: '0644'
+      notify:
+        - Reload systemd config
+        - Restart K3s
+
+  handlers:
+    - name: Reload systemd config
+      ansible.builtin.systemd:
+        daemon_reload: yes
+      listen: "Reload systemd config"
+
+    - name: Restart K3s
+      listen: "Restart K3s"
+      ansible.builtin.service:
+        name: "{{ 'k3s-agent' if 'agent' in group_names else 'k3s' }}"
+        state: restarted

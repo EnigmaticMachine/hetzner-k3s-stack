@@ -1,0 +1,190 @@
+---
+- name: Harden Debian 12 Servers (CIS-Aligned)
+  hosts: bastion
+  become: true
+  vars:
+    # --- CRITICAL USER-CONFIGURABLE VARIABLES ---
+    # Specify the non-root administrative user that will manage the server.
+    # This user MUST have a pre-configured SSH public key for access.
+    admin_user: ops-admin
+
+    # It's highly recommended to change the default SSH port.
+    ssh_port: 22
+
+    # Set to the email address where security notifications should be sent.
+    security_email: "michaelhenzl.em@gmail.com"
+
+    # DANGER: Set to 'true' only if you accept automatic reboots after kernel updates.
+    allow_automatic_reboot: false
+
+  pre_tasks:
+    - name: PRE-FLIGHT CHECK | Check if admin_user exists
+      ansible.builtin.command: "id {{ admin_user }}"
+      register: admin_user_check
+      changed_when: false
+      ignore_errors: true
+
+    - name: PRE-FLIGHT CHECK | Fail if admin_user does not exist
+      ansible.builtin.fail:
+        msg: "The specified admin_user '{{ admin_user }}' does not exist on the target host. The 'id' command failed to find the user. Please create the user and ensure SSH keys are configured before running this playbook."
+      when: admin_user_check.failed
+
+  tasks:
+    # SECTION 1: SYSTEM & PACKAGES
+    - name: APT | Update cache and safely upgrade packages
+      ansible.builtin.apt:
+        update_cache: yes
+        upgrade: "yes" # Changed from 'dist' to avoid breaking changes
+        autoremove: yes
+        autoclean: yes
+      tags: system, packages
+
+    - name: APT | Install essential security and admin packages
+      ansible.builtin.apt:
+        name:
+          - fail2ban            # Intrusion prevention
+          - unattended-upgrades # Automatic security updates
+          - apt-listchanges
+          - auditd              # Linux Auditing System
+          - apparmor            # Application Armor
+          - libpam-pwquality    # Password strength checking
+        state: present
+      tags: system, packages
+
+    # SECTION 2: SSH HARDENING (CRITICAL ORDER)
+    - name: SSH | Harden SSH server configuration
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+        validate: 'sshd -t -f %s'
+      loop:
+        # Access and Authentication
+        - { regexp: '^#?Port', line: 'Port {{ ssh_port }}' }
+        - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin prohibit-password' } # MODIFIED: Allows root login with key
+        - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
+        - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication yes' }
+        - { regexp: '^#?PermitEmptyPasswords', line: 'PermitEmptyPasswords no' }
+        - { regexp: '^#?ChallengeResponseAuthentication', line: 'ChallengeResponseAuthentication no' }
+        - { regexp: '^#?UsePAM', line: 'UsePAM yes' }
+        - { regexp: '^#?AllowUsers', line: 'AllowUsers {{ admin_user }}' }
+        # Security and Session
+        - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
+        - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval 300' }
+        - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax 2' }
+        - { regexp: '^#?LoginGraceTime', line: 'LoginGraceTime 60' }
+        - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
+        - { regexp: '^#?MaxSessions', line: 'MaxSessions 2' }
+        # Modern Cryptography (Based on Mozilla's recommendations)
+        - { regexp: '^#?KexAlgorithms', line: 'KexAlgorithms sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org,gss-curve25519-sha256-,diffie-hellman-group16-sha512,gss-group16-sha512-,diffie-hellman-group18-sha512,diffie-hellman-group-exchange-sha256' }
+        - { regexp: '^#?Ciphers', line: 'Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr' }
+        - { regexp: '^#?MACs', line: 'MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,umac-128-etm@openssh.com,hmac-sha2-512,hmac-sha2-256,umac-128@openssh.com' }
+      notify: Restart sshd
+      tags: ssh
+
+    # SECTION 3: FILESYSTEM HARDENING
+    - name: FSTAB | Secure /dev/shm (Shared Memory)
+      ansible.posix.mount:
+        path: /dev/shm
+        src: tmpfs
+        fstype: tmpfs
+        opts: defaults,noexec,nosuid
+        state: present
+      tags: filesystem
+
+    - name: FSTAB | Secure /tmp
+      ansible.posix.mount:
+        path: /tmp
+        src: tmpfs
+        fstype: tmpfs
+        opts: defaults,noexec,nosuid
+        state: present
+      tags: filesystem
+
+    # SECTION 4: SERVICES & DAEMONS
+    - name: SERVICES | Enable and start core security services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: started
+        enabled: yes
+      loop:
+        - fail2ban
+        - auditd
+        - apparmor
+      tags: services
+
+    - name: FAIL2BAN | Create a local jail config for sshd
+      ansible.builtin.copy:
+        dest: /etc/fail2ban/jail.local
+        content: |
+          [DEFAULT]
+          destemail = {{ security_email }}
+          sender = root@{{ ansible_fqdn }}
+          action = %(action_mwl)s
+
+          [sshd]
+          enabled = true
+          port = {{ ssh_port }}
+          filter = sshd
+          logpath = /var/log/auth.log
+          maxretry = 3
+          bantime = 3600
+      notify: Restart fail2ban
+      tags: services, fail2ban
+
+    # SECTION 5: LOGGING & AUDITING
+    - name: AUDITD | Configure auditd rules
+      ansible.builtin.copy:
+        dest: /etc/audit/rules.d/99-hardening.rules
+        content: |
+          # Monitor for changes to key system files
+          -w /etc/passwd -p wa -k identity
+          -w /etc/group -p wa -k identity
+          -w /etc/shadow -p wa -k identity
+          -w /etc/sudoers -p wa -k privileges
+          # Monitor for login/logout events
+          -w /var/log/faillog -p wa -k logins
+          -w /var/log/lastlog -p wa -k logins
+          # Make the configuration immutable
+          -e 2
+      notify: Restart auditd
+      tags: auditd, logging
+
+    # SECTION 6: AUTOMATIC SECURITY UPDATES
+    - name: UNATTENDED-UPGRADES | Configure and enable
+      ansible.builtin.copy:
+        dest: "{{ item.dest }}"
+        content: "{{ item.content }}"
+      loop:
+        - dest: /etc/apt/apt.conf.d/50unattended-upgrades
+          content: |
+            Unattended-Upgrade::Allowed-Origins {
+                "${distro_id}:${distro_codename}-security";
+            };
+            Unattended-Upgrade::Package-Blacklist {
+            };
+            Unattended-Upgrade::Mail "{{ security_email }}";
+            Unattended-Upgrade::Automatic-Reboot "{{ 'true' if allow_automatic_reboot else 'false' }}";
+            Unattended-Upgrade::Automatic-Reboot-Time "02:00";
+        - dest: /etc/apt/apt.conf.d/20auto-upgrades
+          content: |
+            APT::Periodic::Update-Package-Lists "1";
+            APT::Periodic::Unattended-Upgrade "1";
+      tags: system, unattended-upgrades
+
+  handlers:
+    - name: Restart sshd
+      ansible.builtin.systemd:
+        name: sshd
+        state: restarted
+
+    - name: Restart fail2ban
+      ansible.builtin.systemd:
+        name: fail2ban
+        state: restarted
+
+    - name: Restart auditd
+      ansible.builtin.systemd:
+        name: auditd
+        state: restarted

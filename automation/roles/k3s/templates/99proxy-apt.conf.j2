@@ -1,0 +1,4 @@
+# This file is managed by Ansible. Do not edit manually.
+# It configures the proxy specifically for the APT package manager.
+Acquire::http::Proxy "{{ proxy_url }}";
+Acquire::https::Proxy "{{ proxy_url }}";
