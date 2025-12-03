@@ -6,26 +6,16 @@
   hosts: k3s_first_server
   become: true
 
-  vars:
-    # --- 1. USER CONFIGURATION (UPDATE THESE FROM TERRAFORM OUTPUT) ---
-    lb_public_ip: "91.98.14.109"   # <--- REPLACE with your LB Public IP
-    lb_private_ip: "10.0.1.3"      # <--- REPLACE with your LB Private IP
-    bastion_ip: "10.0.1.2"         # <--- Your Bastion Internal IP
-
-    # --- 2. K3S SETTINGS ---
-    k3s_version: "v1.28.8+k3s1"
-    k3s_install_timeout: 300
-    k3s_service_start_timeout: 60
+  vars_files:
+    - "../../vars.yml"
 
   pre_tasks:
-    # 1. Generate a random token locally if it doesn't exist
     - name: Generate/Retrieve Cluster Token
       ansible.builtin.set_fact:
         k3s_token: "{{ lookup('password', 'credentials/k3s_token.txt length=32 chars=ascii_letters,digits') }}"
       delegate_to: localhost
       run_once: true
 
-    # 2. Define Flags (Includes LB IPs for SSL Certification)
     - name: Set K3s Flags
       ansible.builtin.set_fact:
         k3s_server_common_flags: >-
@@ -34,10 +24,6 @@
           --disable servicelb
           --disable-cloud-controller
         k3s_first_server_flags: "--cluster-init"
-
-    - name: Validate Environment
-      ansible.builtin.debug:
-        msg: "Installing K3s {{ k3s_version }} via Proxy {{ bastion_ip }}:3128"
 
   tasks:
     - name: Install required packages
@@ -51,7 +37,6 @@
         path: /usr/local/bin/k3s
       register: k3s_binary
 
-    # 3. Install K3s (Only if not present)
     - name: Install K3s Server (Cluster Init)
       ansible.builtin.shell: |
         set -euo pipefail
@@ -60,15 +45,13 @@
           {{ k3s_first_server_flags }}
       args:
         executable: /bin/bash
-      # ENVIRONMENT: Crucial for downloading via Bastion Proxy
       environment:
-        http_proxy: "http://{{ bastion_ip }}:3128"
-        https_proxy: "http://{{ bastion_ip }}:3128"
-        no_proxy: "localhost,127.0.0.1,::1,10.0.1.0/24,{{ inventory_hostname }}"
+        http_proxy: "{{ proxy_url }}"
+        https_proxy: "{{ proxy_url }}"
+        no_proxy: "{{ no_proxy_list | join(',') }}"
         K3S_TOKEN: "{{ k3s_token }}"
         INSTALL_K3S_VERSION: "{{ k3s_version }}"
       when: not k3s_binary.stat.exists
-      register: k3s_install_result
 
     - name: Wait for K3s service
       ansible.builtin.systemd:
@@ -84,7 +67,7 @@
       ansible.builtin.command: k3s kubectl get nodes
       register: k3s_nodes
       changed_when: false
-      until: '"Ready" in k3s_nodes.stdout'
+      until: 'ansible_hostname in k3s_nodes.stdout and "Ready" in k3s_nodes.stdout'
       retries: 15
       delay: 10
 
@@ -96,20 +79,16 @@
   hosts: k3s_other_servers
   become: true
 
-  vars:
-    # --- COPY VARS FROM ABOVE (Ansible variables don't persist across plays) ---
-    lb_public_ip: "91.98.14.109"   # <--- REPLACE with your LB Public IP
-    lb_private_ip: "10.0.1.3"      # <--- REPLACE with your LB Private IP
-    bastion_ip: "10.0.1.2"
-    k3s_version: "v1.28.8+k3s1"
-    k3s_install_timeout: 300
+  vars_files:
+    - "../../vars.yml"
 
-    # Dynamic: Get IP of the first server to join
-    first_server_ip: "{{ hostvars[groups['k3s_first_server'][0]]['ansible_host'] | default(groups['k3s_first_server'][0]) }}"
+  vars:
+    # This safely looks up the IP. If 'ansible_host' is missing, it falls back to the hostname.
+    leader_name: "{{ groups['k3s_first_server'][0] }}"
+    first_server_ip: "{{ hostvars[leader_name].get('ansible_host', leader_name) }}"
 
   pre_tasks:
-    # 1. Read the SAME token generated in Play 1
-    - name: Retrieve Cluster Token from Local File
+    - name: Retrieve Cluster Token
       ansible.builtin.set_fact:
         k3s_token: "{{ lookup('file', 'credentials/k3s_token.txt') }}"
       delegate_to: localhost
@@ -121,18 +100,15 @@
           --tls-san {{ lb_private_ip }}
           --disable servicelb
           --disable-cloud-controller
-        # Point to the First Server
         k3s_other_server_flags: "--server https://{{ first_server_ip }}:6443"
 
   tasks:
-    # --- CRITICAL FIX: CREATE DIRECTORY BEFORE COPYING FILE ---
     - name: Ensure K3s manifests directory exists
       ansible.builtin.file:
         path: /var/lib/rancher/k3s/server/manifests
         state: directory
         mode: '0755'
         recurse: yes
-    # ----------------------------------------------------------
 
     - name: Create Traefik config override (Trust LB)
       ansible.builtin.copy:
@@ -149,7 +125,7 @@
                 web:
                   forwardedHeaders:
                     trustedIPs:
-                      - "10.0.1.0/24"
+                      - "{{ private_network_cidr }}"
         owner: root
         group: root
         mode: '0644'
@@ -165,16 +141,16 @@
         path: /usr/local/bin/k3s
       register: k3s_binary
 
-    # 2. Wait for First Server API
+    # We delegate to bastion to avoid local routing issues
     - name: Wait for First Server to be Ready
       ansible.builtin.wait_for:
         host: "{{ first_server_ip }}"
         port: 6443
         timeout: 300
-      delegate_to: localhost
+        state: started
+      delegate_to: bastion
       become: false
 
-    # 3. Install K3s (Join Mode)
     - name: Install K3s Server (Join Cluster)
       ansible.builtin.shell: |
         set -euo pipefail
@@ -184,9 +160,9 @@
       args:
         executable: /bin/bash
       environment:
-        http_proxy: "http://{{ bastion_ip }}:3128"
-        https_proxy: "http://{{ bastion_ip }}:3128"
-        no_proxy: "localhost,127.0.0.1,::1,10.0.1.0/24,{{ inventory_hostname }}"
+        http_proxy: "{{ proxy_url }}"
+        https_proxy: "{{ proxy_url }}"
+        no_proxy: "{{ no_proxy_list | join(',') }}"
         K3S_TOKEN: "{{ k3s_token }}"
         INSTALL_K3S_VERSION: "{{ k3s_version }}"
       when: not k3s_binary.stat.exists
@@ -205,7 +181,7 @@
       ansible.builtin.command: k3s kubectl get nodes
       register: k3s_nodes
       changed_when: false
-      until: 'inventory_hostname in k3s_nodes.stdout and "Ready" in k3s_nodes.stdout'
+      until: 'ansible_hostname in k3s_nodes.stdout and "Ready" in k3s_nodes.stdout'
       retries: 15
       delay: 10
 
@@ -224,10 +200,3 @@
     - name: Display Cluster Status
       ansible.builtin.debug:
         msg: "{{ cluster_nodes.stdout_lines }}"
-
-    - name: Validate Health
-      ansible.builtin.assert:
-        that:
-          - cluster_nodes.rc == 0
-          - "'Ready' in cluster_nodes.stdout"
-        success_msg: "SUCCESS: K3s HA Cluster is Healthy!"

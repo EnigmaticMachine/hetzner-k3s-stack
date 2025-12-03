@@ -1,26 +1,11 @@
 ---
-- name: Install K3s Server on Debian 12
+- name: Configure Private Network Interface (Hetzner)
   hosts: k3s_all_vps
   become: true
-  vars:
-    # --- K3s Configuration Variables ---
-    # Set these variables to customize the K3s installation.
-    # Leave empty or comment out to use K3s defaults.
-    # install_k3s_version: "v1.28.8+k3s1"  # Example: Specify a K3s version
-    install_k3s_exec: ""                  # Example: "server --disable traefik --write-kubeconfig-mode 644"
-    k3s_kubeconfig_mode: ""               # Example: "644" (Makes k3s.yaml world-readable, use with caution!)
-    # --- End K3s Configuration ---
-
-    # Internal variable to build environment flags for the installer script
-    k3s_install_environment:
-      INSTALL_K3S_VERSION: "{{ install_k3s_version | default(omit) }}"
-      INSTALL_K3S_EXEC: "{{ install_k3s_exec | default(omit) }}"
-      K3S_KUBECONFIG_MODE: "{{ k3s_kubeconfig_mode | default(omit) }}"
-
 
   tasks:
     # ===============================================================
-    # Network Configuration Fix
+    # DISABLE CLOUD-INIT NETWORK CONFIG
     # ===============================================================
     - name: Ensure cloud-init network config directory exists
       ansible.builtin.file:
@@ -28,7 +13,7 @@
         state: directory
         mode: '0755'
 
-    - name: Disable cloud-init network configuration if present
+    - name: Disable cloud-init network configuration
       ansible.builtin.copy:
         dest: /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
         content: "network: {config: disabled}\n"
@@ -38,9 +23,12 @@
       register: cloud_init_disabled
       notify: Reboot system
 
-    - name: Create manual network config for enp7s0 (using copy content)
+    # ===============================================================
+    # CONFIGURE PRIVATE INTERFACE (enp7s0)
+    # ===============================================================
+    - name: Create manual network config for enp7s0
       ansible.builtin.copy:
-        dest: "/etc/network/interfaces.d/enp7s0.cfg" # Hardcoded interface name and .cfg extension
+        dest: "/etc/network/interfaces.d/enp7s0.cfg"
         content: |
           # Manual configuration for enp7s0 managed by Ansible
           auto enp7s0
@@ -50,33 +38,29 @@
         owner: root
         group: root
         mode: '0644'
-      become: true
       register: iface_config
-      notify: Reboot system # Still notify handler
+      notify: Reboot system
 
-    - name: Ensure networking service is enabled (for ifupdown)
+    - name: Ensure networking service is enabled
       ansible.builtin.service:
-        name: networking # Service name for ifupdown on Debian
+        name: networking
         enabled: yes
-      # Only strictly necessary if it might have been disabled
 
-    # Required to apply network changes immediately if handler is triggered
-    - name: Flush handlers to force reboot if notified
+    # Force immediate reboot if network config changed
+    - name: Flush handlers to force reboot immediately
       ansible.builtin.meta: flush_handlers
 
-
-
-# ===============================================================
-# Handlers (Add this section at the VERY END of the playbook file)
-# ===============================================================
+  # ===============================================================
+  # HANDLERS
+  # ===============================================================
   handlers:
     - name: Reboot system
       listen: Reboot system
       ansible.builtin.reboot:
         msg: "Rebooting system to apply network configuration changes"
         connect_timeout: 5
-        reboot_timeout: 600 # 10 minutes wait for reboot
-        pre_reboot_delay: 0 # Reboot immediately
-        post_reboot_delay: 30 # Wait 30s after reboot before Ansible tries to reconnect
-        test_command: uptime # Command to check if host is back up
-      become: true # Reboot requires privileges
+        reboot_timeout: 600
+        pre_reboot_delay: 0
+        post_reboot_delay: 30
+        test_command: uptime
+      become: true

@@ -1,0 +1,37 @@
+# -------------------------------------------------------------------
+# INFRASTRUCTURE (From Terraform)
+# -------------------------------------------------------------------
+lb_public_ip: "REPLACE_WITH_LB_IP"
+lb_private_ip: "10.0.1.3"
+
+# The Bastion's Internal IP (Gateway to the internet for private nodes)
+bastion_private_ip: "10.0.1.2"
+proxy_port: "3128"
+
+# The CIDR of the private network (trusted by UFW/Traefik)
+private_network_cidr: "10.0.1.0/24"
+
+# -------------------------------------------------------------------
+# K3S CONFIGURATION
+# -------------------------------------------------------------------
+k3s_version: "v1.28.8+k3s1"
+k3s_install_timeout: 300
+k3s_service_start_timeout: 60
+
+# -------------------------------------------------------------------
+# PROXY SETTINGS
+# -------------------------------------------------------------------
+# We construct the URL here so we don't have to repeat logic in templates
+proxy_url: "http://{{ bastion_private_ip }}:{{ proxy_port }}"
+
+no_proxy_list:
+  - "localhost"
+  - "127.0.0.1"
+  - ".cluster.local"
+  - "10.42.0.0/16"
+  - "10.43.0.0/16"
+  - "::1"
+  - "{{ private_network_cidr }}"
+  - "{{ inventory_hostname }}"
+  - "{{ lb_private_ip }}"
+  - "{{ bastion_private_ip }}"
