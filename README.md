@@ -9,11 +9,42 @@
 
 -----
 
+> ** Status: Open-Sourcing Production Core (v0.1)**
+>
+> I am currently in the process of **generalizing** the Ansible automation to remove client-specific business logic, proprietary tooling, and hardcoded secrets.
+>
+> | Component | Status | Notes |
+> | :--- | :--- | :--- |
+> | **Infrastructure (Terraform)** | **Stable** | Identical to the production modules running in live environments. |
+> | **Configuration (Ansible)** | **Generalizing** | Currently stripping out client-specific data to make the roles generic. |
+> | **Architecture** | **Production-ready** | The design patterns (HA, Security, Storage) are battle-tested on production workloads. |
+
+---
+
 ## Overview
 
 **hetzner-k3s-stack** is a reference architecture for startups and SMBs who have outgrown Heroku but are tired of the "AWS Tax."
 
 It deploys a secure, fully-hardened **High-Availability Kubernetes (K3s)** cluster on Hetzner Cloud in under 10 minutes. Unlike generic tutorials, this framework treats infrastructure as a product. It solves the hard parts of self-hosting—**HA Database patterns, Ingress, Security, and State Management**—so you can focus on shipping code, not configuring control planes.
+
+---
+
+## Real-World Deployments
+
+This architecture is deployed in active production environments to address specific scaling and cost-efficiency requirements for high-traffic clients.
+
+### Case Study A: Symmy.com (Enterprise Integration)
+* **The Workload:** Middleware infrastructure synchronizing data between legacy ERP systems (Pohoda, Helios, Abra) and modern e-commerce marketplaces (Allegro, Shopify).
+* **The Implementation:** Deployed this K3s stack to handle high-concurrency API requests required for real-time inventory and order synchronization.
+* **The Result:** Achieved cost effective consistent data throughput for critical B2B integration streams.
+
+### Case Study B: OD Máj (Public Venue)
+* **The Workload:** Digital infrastructure for a high-traffic physical venue (tens of thousands of daily visitors). The system supports public-facing web applications running primarily on WordPress.
+* **The Implementation:** Migrated workloads from Google Cloud Platform (GCP) to this self-hosted K3s architecture to transition from variable to fixed infrastructure pricing.
+* **The Result:** Established a highly reliable infrastructure with a predictable, flat monthly cost structure.
+
+---
+
 
 ### Philosophy: "Pragmatic Resilience"
 
@@ -154,4 +185,4 @@ I offer **Fixed-Price DevOps Services** for SMBs. I can deploy, manage, and moni
   * **24/7 Monitoring:** Proactive alerts and incident response.
   * **Security Patching:** Weekly updates and CIS benchmark audits.
 
-[**Contact Me**](mailto:michael@steezr.com) | [**Book a Free Architecture Audit**]
+[**Contact Me**](mailto:michaelhenzl.em@gmail.com) | [**Book a Free Architecture Audit**]
