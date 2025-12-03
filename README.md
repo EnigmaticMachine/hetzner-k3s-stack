@@ -72,7 +72,95 @@ This framework deploys a **Hyper-Converged Architecture** to maximize performanc
 
 -----
 
-## Quick Start
+## Quick Start (Alpha Manual Mode)
+
+> **Alpha Notice:** The automatic "glue" script is currently being refactored. For this version, we will provision the infrastructure and then manually update the Ansible inventory.
+
+### 1\. Provision Infrastructure (Terraform)
+
+First, we create the infra layer.
+
+**A. Prepare your credentials:**
+
+1.  **Hetzner Token:** Go to [Hetzner Console](https://console.hetzner.cloud/) -\> Select Project -\> **Security** -\> **API Tokens** -\> **Generate API Token** (Read/Write).
+2.  **SSH Key:** Copy the contents of your local public key (e.g., `cat ~/.ssh/id_ed25519.pub`).
+
+**B. Run Terraform:**
+
+```bash
+cd infrastructure/hetzner
+
+# Initialize providers
+terraform init
+
+# Apply infrastructure
+terraform apply
+```
+
+**C. Enter Credentials when prompted:**
+
+  * `var.hcloud_token`: Paste your Hetzner API Token.
+  * `var.ssh_public_key`: Paste the text content of your public SSH key (starts with `ssh-ed25519...` or `ssh-rsa...`).
+
+> **Note:** Once Terraform finishes, keep the terminal open. You will need the **Outputs** (IP addresses) for the next step.
+
+-----
+
+### 2\. Configure Inventory
+
+Now we need to tell Ansible where the new servers are.
+
+**A. Update the Bastion Host:**
+Open `automation/hosts.ini` in your editor. Replace `REPLACE_WITH_BASTION_IP` with the **Public IP** of the Bastion output from Terraform.
+
+```ini
+# automation/hosts.ini
+[bastion]
+bastion ansible_host=49.12.xx.xx ansible_user=root ...
+```
+
+**B. Update the Load Balancer VIP:**
+Open `automation/vars.yml`. Replace `REPLACE_WITH_LB_IP` with the **Public IP** of the Load Balancer output from Terraform.
+
+```yaml
+# automation/vars.yml
+# INFRASTRUCTURE (From Terraform)
+lb_public_ip: "91.98.xx.xx"
+```
+
+-----
+
+### 3\. Bootstrap Cluster (Ansible)
+
+Finally, we apply the configuration layers. Run these playbooks in specific order to establish the secure tunnel before attempting to install Kubernetes.
+
+```bash
+cd ../../automation
+
+# 1. Harden Bastion & Setup Squid Proxy
+# (This creates the secure tunnel for the private nodes)
+ansible-playbook -i hosts.ini roles/bastion/01_init_setup.yml
+
+# 2. Configure Proxy Envs on Nodes
+# (Ensures nodes use the Bastion to reach the internet)
+ansible-playbook -i hosts.ini roles/k3s/01_proxy_setup.yml
+
+# 3. Setup Private Networking
+# (Configures internal routing and disables Cloud-Init)
+ansible-playbook -i hosts.ini roles/k3s/02_setup_network.yml
+
+# 4. Install K3s Cluster
+# (Bootstraps the HA Control Plane)
+ansible-playbook -i hosts.ini roles/k3s/03_install_server_nodes.yml
+```
+
+### 4\. Verify Access
+
+SSH into the first control plane node (via Bastion) to check the cluster status:
+
+```bash
+ssh -J root@<BASTION_IP> root@10.0.1.11 kubectl get nodes
+```
 
 
 -----
@@ -82,6 +170,7 @@ This framework deploys a **Hyper-Converged Architecture** to maximize performanc
 This repository deploys the **"Launchpad" Architecture**. It is designed for maximum cost-efficiency by running Workloads, Storage, and the Control Plane on the same nodes.
 
   * **Perfect for:** Staging, MVPs, Development, and Cost-Sensitive Startups.
+  * **The Trade-off:** High disk I/O from workloads (e.g., large database imports) can impact Etcd latency, potentially causing momentary cluster instability.
 
 ### Graduation Path (The "Scale-Up")
 
