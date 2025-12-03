@@ -21,10 +21,10 @@
     - name: PREFLIGHT | Install common prerequisites
       ansible.builtin.apt:
         name:
-          - ufw              # Firewall
-          - fail2ban         # Anti-Bruteforce
+          - ufw                 # Firewall
+          - fail2ban            # Anti-Bruteforce
           - unattended-upgrades # Security patches
-          - net-tools        # Debugging (netstat, etc)
+          - net-tools           # Debugging (netstat, etc)
         state: present
         update_cache: true
         cache_valid_time: 3600

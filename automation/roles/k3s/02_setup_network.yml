@@ -46,7 +46,7 @@
         name: networking
         enabled: yes
 
-    # Force immediate reboot if network config changed
+    # Reboot if network config changed
     - name: Flush handlers to force reboot immediately
       ansible.builtin.meta: flush_handlers
 
