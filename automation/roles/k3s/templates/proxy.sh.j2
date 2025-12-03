@@ -1,0 +1,13 @@
+# This file is managed by Ansible. Do not edit manually.
+# It sets proxy environment variables for all interactive user shells.
+
+export http_proxy="{{ proxy_url }}"
+export https_proxy="{{ proxy_url }}"
+export ftp_proxy="{{ proxy_url }}"
+export no_proxy="{{ no_proxy_list | join(',') }}"
+
+# For case-insensitivity often expected by tools
+export HTTP_PROXY="{{ proxy_url }}"
+export HTTPS_PROXY="{{ proxy_url }}"
+export FTP_PROXY="{{ proxy_url }}"
+export NO_PROXY="{{ no_proxy_list | join(',') }}"

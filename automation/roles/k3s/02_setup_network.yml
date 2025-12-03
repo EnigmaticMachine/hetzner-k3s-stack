@@ -1,0 +1,66 @@
+---
+- name: Configure Private Network Interface (Hetzner)
+  hosts: k3s_all_vps
+  become: true
+
+  tasks:
+    # ===============================================================
+    # DISABLE CLOUD-INIT NETWORK CONFIG
+    # ===============================================================
+    - name: Ensure cloud-init network config directory exists
+      ansible.builtin.file:
+        path: /etc/cloud/cloud.cfg.d
+        state: directory
+        mode: '0755'
+
+    - name: Disable cloud-init network configuration
+      ansible.builtin.copy:
+        dest: /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+        content: "network: {config: disabled}\n"
+        owner: root
+        group: root
+        mode: '0644'
+      register: cloud_init_disabled
+      notify: Reboot system
+
+    # ===============================================================
+    # CONFIGURE PRIVATE INTERFACE (enp7s0)
+    # ===============================================================
+    - name: Create manual network config for enp7s0
+      ansible.builtin.copy:
+        dest: "/etc/network/interfaces.d/enp7s0.cfg"
+        content: |
+          # Manual configuration for enp7s0 managed by Ansible
+          auto enp7s0
+          iface enp7s0 inet dhcp
+              post-up ip route add default via 10.0.0.1 dev enp7s0
+              dns-nameservers 10.0.1.1
+        owner: root
+        group: root
+        mode: '0644'
+      register: iface_config
+      notify: Reboot system
+
+    - name: Ensure networking service is enabled
+      ansible.builtin.service:
+        name: networking
+        enabled: yes
+
+    # Reboot if network config changed
+    - name: Flush handlers to force reboot immediately
+      ansible.builtin.meta: flush_handlers
+
+  # ===============================================================
+  # HANDLERS
+  # ===============================================================
+  handlers:
+    - name: Reboot system
+      listen: Reboot system
+      ansible.builtin.reboot:
+        msg: "Rebooting system to apply network configuration changes"
+        connect_timeout: 5
+        reboot_timeout: 600
+        pre_reboot_delay: 0
+        post_reboot_delay: 30
+        test_command: uptime
+      become: true

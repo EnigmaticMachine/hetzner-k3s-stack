@@ -1,0 +1,41 @@
+# Listen on the IP and port defined in your playbook variables
+http_port {{ squid_listen_ip }}:{{ squid_listen_port }}
+
+# =================================================================
+# ACCESS CONTROL LISTS (ACLs)
+# =================================================================
+
+# Define the source network for VPN clients
+acl vpn_network src {{ vpn_network_cidr }}
+
+# Define an ACL for the CONNECT method
+acl CONNECT method CONNECT
+
+# Define the ports that are allowed for the CONNECT method (tunneling)
+acl Connect_ports port {{ squid_connect_ports | join(' ') }}
+
+# =================================================================
+# ACCESS RULES - ORDER IS CRITICAL
+# =================================================================
+
+# 1. Deny any CONNECT request trying to use a port not on our allowed list.
+#    This is a critical security rule.
+http_access deny CONNECT !Connect_ports
+
+# 2. Explicitly ALLOW clients from our vpn_network to use the CONNECT method
+#    on the ports we have defined as safe for tunneling.
+#    THIS IS THE RULE THAT FIXES THE "403 Forbidden" ERROR.
+http_access allow vpn_network CONNECT Connect_ports
+
+# 3. Allow general HTTP/HTTPS traffic from the vpn_network so they can
+#    also use this proxy for web browsing if needed.
+http_access allow vpn_network
+
+# 4. Deny everything else. This must be the last access rule.
+http_access deny all
+
+# =================================================================
+# MISC SETTINGS
+# =================================================================
+visible_hostname bastion-proxy
+coredump_dir /var/spool/squid

@@ -1,0 +1,65 @@
+---
+- name: Setup System-Wide Proxy on Application Servers
+  hosts: k3s_all_vps
+  become: true
+
+  vars_files:
+    - "../../vars.yml"
+
+  tasks:
+    - name: Configure proxy for interactive shells
+      ansible.builtin.template:
+        src: templates/proxy.sh.j2
+        dest: /etc/profile.d/proxy.sh
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Create systemd config directory
+      ansible.builtin.file:
+        path: /etc/systemd/system.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Configure proxy for systemd services
+      ansible.builtin.template:
+        src: templates/99-proxy-vars.conf.j2
+        dest: /etc/systemd/system.conf.d/99-proxy-vars.conf
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Reload systemd config
+
+    - name: Configure APT proxy
+      ansible.builtin.template:
+        src: templates/99proxy-apt.conf.j2
+        dest: /etc/apt/apt.conf.d/99proxy-apt.conf
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Ensure containerd config directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/system/containerd.service.d
+        state: directory
+        mode: '0755'
+
+    - name: Configure containerd proxy
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/containerd.service.d/http-proxy.conf
+        content: |
+          [Service]
+          Environment="HTTP_PROXY={{ proxy_url }}"
+          Environment="HTTPS_PROXY={{ proxy_url }}"
+          Environment="NO_PROXY={{ no_proxy_list | join(',') }}"
+        mode: '0644'
+      notify:
+        - Reload systemd config
+
+  handlers:
+    - name: Reload systemd config
+      ansible.builtin.systemd:
+        daemon_reload: yes
+      listen: "Reload systemd config"

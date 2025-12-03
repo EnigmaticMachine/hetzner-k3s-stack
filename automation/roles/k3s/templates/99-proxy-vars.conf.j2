@@ -1,0 +1,4 @@
+# This file is managed by Ansible. Do not edit manually.
+# It sets the default environment for all systemd-managed services.
+[Manager]
+DefaultEnvironment="http_proxy={{ proxy_url }}" "https_proxy={{ proxy_url }}" "ftp_proxy={{ proxy_url }}" "no_proxy={{ no_proxy_list | join(',') }}" "HTTP_PROXY={{ proxy_url }}" "HTTPS_PROXY={{ proxy_url }}" "FTP_PROXY={{ proxy_url }}" "NO_PROXY={{ no_proxy_list | join(',') }}"
