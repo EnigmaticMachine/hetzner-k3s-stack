@@ -9,7 +9,7 @@
     # vault_proxy_pass: "proxypassword"
 
     # --- Configuration variables ---
-    proxy_host: "10.0.1.1"
+    proxy_host: "10.0.1.2"
     proxy_port: "3128"
 
     # Build the proxy URL dynamically. This handles cases with and without auth.
