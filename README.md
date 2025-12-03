@@ -111,7 +111,9 @@ terraform apply
 Now we need to tell Ansible where the new servers are.
 
 **A. Update the Bastion Host:**
-Open `automation/hosts.ini` in your editor. Replace `REPLACE_WITH_BASTION_IP` with the **Public IP** of the Bastion output from Terraform.
+Open `automation/hosts.ini` in your editor.
+1. Replace `REPLACE_WITH_BASTION_IP` with the **Public IP** of the Bastion from Terraform outputs.
+2. Ensure `ansible_ssh_private_key_file` points to the private key matching the public key you provided to Terraform.
 
 ```ini
 # automation/hosts.ini
